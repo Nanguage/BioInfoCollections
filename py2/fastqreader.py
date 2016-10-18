@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-reader
+fastqreader
 ~~~~~~
 This module for read sequences from fastq files.
 

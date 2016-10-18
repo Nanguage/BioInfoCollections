@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """
-blastn
+blastnruner
 ~~~~~~
 This module for do Blast(blastn) and return the match information.
 
