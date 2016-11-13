@@ -78,7 +78,7 @@ class FastqReader(Iterator):
         result = None
         lines = [self.current_file.readline() for i in range(4)]
         # arrived at the end of the file
-        if lines == '':
+        if lines == ['', '', '', '']:
             self.pointer += 1
             try:
                 next_f = self.files[self.pointer]
