@@ -87,7 +87,7 @@ class FastqReader(Iterator):
                 self.status = 'C'
                 raise StopIteration
             self.current_file = next_f
-        seq = lines[1]
+        seq = lines[1].strip()
         # filter the seq by seqfilter
         if self.filter is not None:
             if self.filter(seq):
