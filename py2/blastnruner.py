@@ -2,7 +2,7 @@
 
 """
 blastnruner
-~~~~~~
+~~~~~~~~~~~
 This module for do Blast(blastn) and return the match information.
 
 """
@@ -11,12 +11,12 @@ import os
 import random
 
 class BlastnRuner():
-    '''
+    """
     Do blastn and parse the result, return the matches.
 
-    '''
+    """
     def __init__(self, blastdb, outfmt=6, evalue=0.01, short=False, cache='./blastncache'):
-        '''
+        """
         blastdb: path to the database of blast
         outfmt: output format of blastn, default 5 is xml
         evalue: describes the number of hits one can "expect" to see
@@ -25,7 +25,7 @@ class BlastnRuner():
             use when sequence length less than 30 nucleotides.
         cache: cache directory.
 
-        '''
+        """
         self.id = str(random.randint(10000, 20000)) + str(id(self)) + str(os.getpid())
         self._fmt = outfmt
         # buffer for storage sequences
@@ -42,34 +42,34 @@ class BlastnRuner():
         if short: self.command += ' -task blastn-short'
 
     def __del__(self):
-        '''Clean the cache file.'''
+        """Clean the cache file."""
         if os.path.exists(self.in_file):
             os.remove(self.in_file)
         if os.path.exists(self.out_file):
             os.remove(self.out_file)
 
     def add(self, seqs):
-        '''Add sequences to buffer.'''
+        """Add sequences to buffer."""
         if type(seqs) is list:
             self.buffer += seqs
         else:
             self.buffer.append(seqs)
 
     def _write(self):
-        '''Write the sequences in the buffer to in_file.'''
+        """Write the sequences in the buffer to in_file."""
         with open(self.in_file, 'w') as f:
             for i, s in enumerate(self.buffer):
                 f.write('>%d\n'%i)
                 f.write('%s\n'%s)
 
     def _read(self):
-        '''Read blastn output.'''
+        """Read blastn output."""
         with open(self.out_file, 'r') as f:
             result = f.read()
         return result
 
     def parse_xml(self, xml):
-        '''
+        """
         Parse the output xml.
         xml: struct(useful) like this:
             <Iteration>
@@ -79,15 +79,15 @@ class BlastnRuner():
                     <Hit></Hit>
                 </Iteration_hits>
             </Iteration>
-        
-        '''
+
+        """
         # TODO
         raise NotImplementedError("Can only parse fmt 6 now")
 
     def parse_fmt6(self, fmt6):
-        '''
+        """
         Parse NO.6 output format.
-        fmt6: 
+        fmt6:
           format:
             Query Target Percent Alignment mismatch gaps start_q end_q start_t end_t e-value bit_score
           example:
@@ -98,14 +98,14 @@ class BlastnRuner():
         RETURN: a list of matches like:
             [
                 [('Rv1023, 100, 12, ...)],
-                None, 
-                [('Rv0911', 100, 12, ...), ('Rv2518c', 100, 11, ...)], 
+                None,
+                [('Rv0911', 100, 12, ...), ('Rv2518c', 100, 11, ...)],
                 ...
             ]
             one item corresponding to one sequence in buffer
             if one item can't find match the item is: None
 
-        '''
+        """
         # No matched result
         if fmt6 == '':
             return [None for i in self.buffer]
@@ -124,12 +124,12 @@ class BlastnRuner():
         return result
 
     def blastn(self):
-        '''
+        """
         The interface of the class.
         CALL: _write->_read->parse_
-        RETURN: a list of best match 
+        RETURN: a list of best match
 
-        '''
+        """
         self._write()
         command = self.command.format(in_file=self.in_file,\
                 out_file=self.out_file)
@@ -144,9 +144,9 @@ class BlastnRuner():
         return result
 
     def blastn_one(self, seq):
-        '''
+        """
         Blast one sequence use subprocess.
 
-        '''
+        """
         # TODO
         raise NotImplementedError("unimplemented method.")
