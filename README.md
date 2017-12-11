@@ -1,4 +1,4 @@
-# Unlimited Bioinfomatics Works
+# Unlimited Bioinformatics Works
 
 ## Chant:
 
@@ -18,6 +18,6 @@
 > 
 > So as I pray,
 >
-> Unlimited Bioinfomatics Works !!!
+> Unlimited Bioinformatics Works !!!
 
-![UBW](imgs/ubw.jpg)
+![UBW](ubw.jpg)
