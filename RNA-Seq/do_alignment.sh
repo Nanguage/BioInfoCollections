@@ -1,4 +1,4 @@
-#/bin/bash -e
+#!/bin/bash -e
 
 # do alignment for pair end fastq.gz file,
 # and sort, index the result bam file
