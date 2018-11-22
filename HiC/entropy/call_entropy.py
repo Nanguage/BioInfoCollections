@@ -2,9 +2,12 @@
 """
 
 import os
+import re
 from itertools import repeat, tee
 import operator
 from concurrent.futures import ProcessPoolExecutor
+import subprocess
+from collections import namedtuple
 
 import click
 from cooler.api import Cooler
@@ -127,6 +130,9 @@ class MatrixSelector(object):
         return m.fetch(region1, region2)
 
 
+BedGraph = namedtuple("BedGraph", ['chrom', 'start', 'end', 'value'])
+
+
 def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
     """
     iterate over the chunk, calculate a value.
@@ -152,42 +158,115 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
         entropy = scipy.stats.entropy(arr)
         bin_region = chrom, s, e
         region = selector.binid_region2genome_region(bin_region)
-        yield (region, entropy)
+        result = BedGraph(*region, entropy)
+        yield result
 
 
-def to_bedgraph(result_iter, outpath):
+def write_bedgraph(bg_iter, outpath):
     """
-    write the result to a file,
-    in bedgraph format,
-    4 columns:
+    write the bedgraph to a file,
+    bedgraph format, 4 columns:
         <chromosome>    <start>    <end>    <value>
     """
     with open(outpath, 'w') as f:
-        for (chrom, start, end), value in result_iter:
+        for chrom, start, end, value in bg_iter:
             fields = [str(i) for i in (chrom, start, end, value)]
             outline = "\t".join(fields) + "\n"
             f.write(outline)
 
 
-def process_chunk(selector, chrom, chunk, output):
-    results = sliding_cal_entropy(selector, chrom, chunk)
+def filter_abnormal(bg_iter):
+    """
+    filter out the abnormal bedgraphs
+    """
+    for bg in bg_iter:
+        if bg.value == float('inf') or bg.value == -float('inf'):
+            continue
+        if not bg.chrom.startswith('chr'):
+            bg = BedGraph("chr"+bg.chrom, bg.start, bg.end, bg.value)
+        yield bg
+
+
+def process_chunk(selector, chrom, chunk, output, coverage):
+    results = sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=coverage)
+    filtered = filter_abnormal(results)
     try_id = 0
     tmp_path = lambda id_: output + ".tmp.{}".format(id_)
     while os.path.exists(tmp_path(try_id)):
         try_id += 1
     tmp_file = tmp_path(try_id)
-    to_bedgraph(results, tmp_file)
+    write_bedgraph(filtered, tmp_file)
+    return tmp_file
+
+
+def merge_and_sort(tmp_files):
+    """
+    Merge tmp bedGraph files, and sort it, 
+    yield sorted lines.
+    """
+    merged_file = re.sub("\.tmp\..", "", tmp_files[0]) + ".tmp"
+    # merge tmp_files
+    cmd = "cat " + " ".join(tmp_files) + " > " + merged_file
+    subprocess.check_call(cmd, shell=True)
+    # rm tmp files
+    cmd = ['rm'] + tmp_files
+    subprocess.check_call(cmd)
+    # sort output
+    cmd = ['sort', '-k1,1', '-k2,2n', '-u', merged_file]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    for line in p.stdout:
+        yield line.decode('utf8')
+
+
+def parse_bedgraph(line_iter):
+    """
+    yield sorted bedGraph tuples:
+        (chrom, start, end, value)
+    """
+    for line in line_iter:
+        chrom, start, end, value = line.strip().split()
+        start, end = int(start), int(end)
+        value = float(value)
+        yield BedGraph(chrom, start, end, value)
+
+
+def eliminate_overlap(bg_iter, window_size, overlap, resolution):
+    """
+    eliminate the overlap between blocks, use later value cover previous value.
+
+        ----                        ----
+      ----              ->        --
+    ----                        --
+    |--------------|            |--------------|
+    """
+    prev = next(bg_iter)
+    for bg in bg_iter:
+        if bg.chrom == prev.chrom:
+            expected_step = (window_size - overlap) * resolution
+            step = bg.start - prev.start
+            if step <= 0:
+                raise IOError("input bedgraph should be sorted.")
+            else:
+                if step != expected_step:
+                    yield prev
+                else:
+                    new_prev = BedGraph(prev.chrom, prev.start, bg.start, prev.value)
+                    yield new_prev
+        else:
+            yield prev
+        prev = bg
+    yield prev
 
 
 @click.command()
 @click.argument("cool-uri")
 @click.argument("output")
-@click.option("--window-size",
+@click.option("--window-size", "-w",
     type=int, default=1,
     help="The size of sliding window. " \
          "The unit is number of bins, " \
          "default 1")
-@click.option("--overlap",
+@click.option("--overlap", "-o",
     type=int, default=0,
     help="The size of sliding window overlap. "\
          "Value should less than the window size, " \
@@ -199,9 +278,15 @@ def process_chunk(selector, chrom, chunk, output):
 @click.option("--processes", "-p",
     type=int, default=1,
     help="Number of processes.")
-@click.option("--chunk-size", "-c",
-    type=int, default=10000)
-def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size):
+@click.option("--chunk-size", "-s",
+    type=int, default=10000,
+    help="How many blocks in one chunk, for parallel processing.")
+@click.option("--coverage", "-c",
+    default=0.5,
+    help="The coverage rate threshold, " + \
+         "only bins coverage large equal than this will be keeped. " + \
+         "default 0.5")
+def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
     c = Cooler(cool_uri)
     resolution = c.info['bin-size']
     chromsizes = c.chromsizes.to_dict()
@@ -215,8 +300,15 @@ def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chu
     matrix_selector = MatrixSelector(c, balance=balance)
 
     with ProcessPoolExecutor(max_workers=processes) as excuter:
-        for res in excuter.map(process_chunk, repeat(matrix_selector), chroms, chunks, repeat(output)):
-            pass
+        tmp_files = []
+        for fname in excuter.map(process_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(coverage)):
+            tmp_files.append(fname)
+
+    sorted_lines = merge_and_sort(tmp_files)
+    bgs = parse_bedgraph(sorted_lines)
+    non_overlap = eliminate_overlap(bgs, window_size, overlap, resolution)
+    write_bedgraph(non_overlap, output)
+    subprocess.check_call(['rm', output + ".tmp"])  # rm merged tmp file
 
 
 def unit_tests():
@@ -246,9 +338,24 @@ def unit_tests():
             for b in chunk:
                 print(b)
 
+    def test_eliminate_overlap():
+        bgs = [
+            BedGraph('1',    0, 1000, 1.0),
+            BedGraph('1', 2000, 3000, 1.0),
+            BedGraph('1', 2500, 3500, 1.1),
+            BedGraph('1', 3000, 4000, 1.2),
+            BedGraph('2', 1000, 2000, 1.0),
+            BedGraph('2', 1500, 2500, 1.1),
+            BedGraph('2', 2000, 3000, 1.2),
+        ]
+        res = eliminate_overlap((i for i in bgs), 2, 1, 500)
+        for i in res:
+            print(i)
+
     #test_tiling()
     #test_chunking()
-    test_chromosome_chunks()
+    #test_chromosome_chunks()
+    test_eliminate_overlap()
 
 
 if __name__ == "__main__":
