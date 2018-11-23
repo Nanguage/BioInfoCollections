@@ -44,6 +44,8 @@ def output(res_iter, outpath):
     help="How long is one probe. default 30")
 def main(fasta_path, output_path, genome_region, probe_number, probe_length):
     """
+    Fetch a series of uniform spaced probe(sub-sequence) from a genome region.
+
     \b
     Args
     ----
@@ -58,6 +60,7 @@ def main(fasta_path, output_path, genome_region, probe_number, probe_length):
     print("fasta file: " + fasta_path)
     print("genome region: " + genome_region)
     print("probe number: " + str(probe_number))
+    print("probe length: " + str(probe_length))
     fa = Fasta(fasta_path)
     chrom, start, end = parse_genome_region(genome_region)
     region_length = end - start
