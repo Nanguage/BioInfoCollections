@@ -47,7 +47,7 @@ def is_unique_mapped(blastn_out_file, outfmt=6):
     return n == 1
 
 
-def passed(candidate_seq, blastn_db, tmpdir):
+def passed(candidate_seq, blastn_db, evalue, tmpdir):
     """
     judge a candidate probe can pass(is unique mapped) or not.
 
@@ -57,6 +57,8 @@ def passed(candidate_seq, blastn_db, tmpdir):
         candidate probe seq.
     blastn_db : str
         Path to blastn database.
+    evalue : float
+        '-evalue' parameter in blastn
     tmpdir : str
         Path to temporary dir, used for store the blasn result file.
     """
@@ -67,17 +69,17 @@ def passed(candidate_seq, blastn_db, tmpdir):
     tmp_in  = os.path.join(tmpdir, seqname+".fa")
     save_fasta([seq], tmp_in)
     tmp_out = os.path.join(tmpdir, seqname+".tsv")
-    cline = NcbiblastnCommandline(query=tmp_in, db=blastn_db, evalue=0.001, outfmt=6, out=tmp_out)
+    cline = NcbiblastnCommandline(query=tmp_in, db=blastn_db, evalue=evalue, outfmt=6, out=tmp_out)
     stdout, stderr = cline()
     return is_unique_mapped(tmp_out)
 
 
-def search_passed_probes(input_seqs, blastn_db, probe_length, search_step, blastn_tmpdir, threads):
+def search_passed_probes(input_seqs, blastn_db, evalue, probe_length, search_step, blastn_tmpdir, threads):
     for seq in input_seqs:
         candidates = candidate_probes(seq, probe_length, search_step)
         candi_1, candi_2 = tee(candidates)
         with ProcessPoolExecutor(max_workers=threads) as executor:
-            passed_iter = executor.map(passed, candi_2, repeat(blastn_db), repeat(blastn_tmpdir))
+            passed_iter = executor.map(passed, candi_2, repeat(blastn_db), repeat(evalue), repeat(blastn_tmpdir))
             for candidate, is_passed in zip(candi_1, passed_iter):
                 print(candidate.name, candidate.sub_range)
                 if is_passed:
@@ -98,13 +100,16 @@ def search_passed_probes(input_seqs, blastn_db, probe_length, search_step, blast
 @click.option("--search-step", "-s",
     default=10,
     help="Unique map search step. default 10.")
+@click.option("--evalue", "-e",
+    default=0.001,
+    help="'-evalue' parameter in blastn alignment.")
 @click.option("--blastn-tmpdir", "-b",
     default="./.blastn/",
     help="Temporary blastn directory. default .blastn")
 @click.option("--threads", "-t",
     default=1,
     help="Use how many threads. default 1")
-def main(input, blastndb, output, probe_length, search_step, blastn_tmpdir, threads):
+def main(input, blastndb, output, probe_length, search_step, evalue, blastn_tmpdir, threads):
     """
     Search unique mapped probe(sub-sequence)
     within a series of sequences stored in a fasta file.
@@ -134,7 +139,7 @@ def main(input, blastndb, output, probe_length, search_step, blastn_tmpdir, thre
     """
     with open(input) as f:
         input_seqs = FastaIO.FastaIterator(f)
-        probes = search_passed_probes(input_seqs, blastndb, probe_length, search_step, blastn_tmpdir, threads)
+        probes = search_passed_probes(input_seqs, blastndb, evalue, probe_length, search_step, blastn_tmpdir, threads)
         save_fasta(probes, output)
 
 
