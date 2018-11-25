@@ -286,7 +286,7 @@ def eliminate_overlap(bg_iter, window_size, overlap, resolution):
     help="The coverage rate threshold, " + \
          "only bins coverage large equal than this will be keeped. " + \
          "default 0.5")
-def call_loci_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
+def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
     c = Cooler(cool_uri)
     resolution = c.info['bin-size']
     chromsizes = c.chromsizes.to_dict()
@@ -359,5 +359,5 @@ def unit_tests():
 
 
 if __name__ == "__main__":
-    eval("call_loci_entropy()")
+    eval("call_entropy()")
     #unit_tests()
