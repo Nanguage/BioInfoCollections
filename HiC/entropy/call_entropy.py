@@ -187,7 +187,7 @@ def filter_abnormal(bg_iter):
         yield bg
 
 
-def process_chunk(selector, chrom, chunk, output, coverage):
+def process_loci_chunk(selector, chrom, chunk, output, coverage):
     results = sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=coverage)
     filtered = filter_abnormal(results)
     try_id = 0
@@ -258,7 +258,12 @@ def eliminate_overlap(bg_iter, window_size, overlap, resolution):
     yield prev
 
 
-@click.command()
+@click.group()
+def call_entropy():
+    pass
+
+
+@call_entropy.command()
 @click.argument("cool-uri")
 @click.argument("output")
 @click.option("--window-size", "-w",
@@ -286,7 +291,15 @@ def eliminate_overlap(bg_iter, window_size, overlap, resolution):
     help="The coverage rate threshold, " + \
          "only bins coverage large equal than this will be keeped. " + \
          "default 0.5")
-def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
+def call_loci_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
+    """
+    Args
+    ----
+    cool_uri : str
+        URI of input cool container.
+    output : str
+        Path to output BEDGRAPH file.
+    """
     c = Cooler(cool_uri)
     resolution = c.info['bin-size']
     chromsizes = c.chromsizes.to_dict()
@@ -301,7 +314,7 @@ def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chu
 
     with ProcessPoolExecutor(max_workers=processes) as excuter:
         tmp_files = []
-        for fname in excuter.map(process_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(coverage)):
+        for fname in excuter.map(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(coverage)):
             tmp_files.append(fname)
 
     sorted_lines = merge_and_sort(tmp_files)
@@ -309,6 +322,52 @@ def call_entropy(cool_uri, output, window_size, overlap, balance, processes, chu
     non_overlap = eliminate_overlap(bgs, window_size, overlap, resolution)
     write_bedgraph(non_overlap, output)
     subprocess.check_call(['rm', output + ".tmp"])  # rm merged tmp file
+
+
+GenomeRange_ = namedtuple("GenomeRange", ["chr", "start", "end"])
+class GenomeRange(GenomeRange_):
+    def __str__(self):
+        return "{}:{}-{}".format(self.chr, self.start, self.end)
+
+
+def read_bed(bed_path):
+    """
+    Read BED file.
+    yield a series of genome ranges.
+    """
+    with open(bed_path) as f:
+        for line in f:
+            items = line.strip().split()
+            chr_ = items[0]
+            start = int(items[1])
+            end = int(items[2])
+            yield GenomeRange(chr_, start, end)
+
+
+def region_entropy(matrix_selector, GenomeRange):
+    pass
+
+
+@call_entropy.command()
+@click.argument("cool-uri")
+@click.argument("bed-path")
+@click.argument("output")
+@click.option("--balance/--no-balance",
+    default=True,
+    help="Use balanced matrix or not.")
+def call_region_entropy(cool_uri, bed_path, output, balance):
+    """
+    Args
+    ----
+    cool_uri : str
+        URI of input cool container.
+    bed_path : str
+        Path to input BED.
+    output : str
+        Path to output BEDGRAPH file.
+    """
+    c = Cooler(cool_uri)
+    matrix_selector = MatrixSelector(c, balance=balance)
 
 
 def unit_tests():
