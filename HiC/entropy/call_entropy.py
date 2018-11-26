@@ -345,8 +345,9 @@ def call_entropy():
     help="The coverage rate threshold, " + \
          "only bins coverage large equal than this will be keeped. " + \
          "default 0.5")
-def call_loci_entropy(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
+def loci(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
     """
+    \b
     Args
     ----
     cool_uri : str
@@ -415,8 +416,9 @@ def iterover_regions_call_entropy(genome_range_iter, matrix_selector, non_nan_th
     help="The coverage rate threshold, " + \
          "only bins coverage large equal than this will be keeped. " + \
          "default 0.5")
-def call_region_entropy(cool_uri, bed_path, output, balance, coverage):
+def region(cool_uri, bed_path, output, balance, coverage):
     """
+    \b
     Args
     ----
     cool_uri : str
@@ -429,6 +431,9 @@ def call_region_entropy(cool_uri, bed_path, output, balance, coverage):
     c = Cooler(cool_uri)
     matrix_selector = MatrixSelector(c, balance=balance)
     regions = read_bed(bed_path)
+    bgs = iterover_regions_call_entropy(regions, matrix_selector, coverage)
+    bgs = filter_abnormal(bgs)
+    write_bedgraph(bgs, output)
 
 
 def unit_tests():
