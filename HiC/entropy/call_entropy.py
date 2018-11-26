@@ -15,6 +15,97 @@ import numpy as np
 import scipy.stats
 
 
+GenomeRange_ = namedtuple("GenomeRange", ["chr", "start", "end"])
+class GenomeRange(GenomeRange_):
+    def __str__(self):
+        if (self.start is not None) and (self.end is not None):
+            return "{}:{}-{}".format(self.chr, self.start, self.end)
+        else:
+            return self.chr
+    
+    def change_chromname(self):
+        if self.chr.startswith("chr"):
+            chr_ = self.chr.replace("chr", "")
+            return GenomeRange(chr_, self.start, self.end)
+        else:
+            return GenomeRange("chr"+self.chr, self.start, self.end)
+
+def region_str2genome_range(region):
+    if '-' in region:
+        chr_, s, e = re.split("[:-]", region)[:3]
+        grange = GenomeRange(chr_, s, e)
+    else:
+        chr_ = region
+        grange = GenomeRange(chr_, None, None)
+    return grange
+
+
+class MatrixSelector(object):
+    """
+    Selector for fetch the matrix from cool file.
+    """
+    def __init__(self, cool, balance=True):
+        self.cool = cool
+        self.balance = balance
+
+    def binid_region2genome_range(self, binid_region):
+        chr_, binid1, binid2 = binid_region
+        assert chr_ in self.cool.chromnames
+        resolution = self.cool.info['bin-size']
+        start = binid1 * resolution
+        end = binid2 * resolution
+        grange = GenomeRange(chr_, start, end)
+        return grange
+
+    def confirm_chromosome_name(self, region):
+        """
+        confirm region's chromosome in cool
+
+        Parameters
+        ----------
+        region : str
+        """
+        grange = region_str2genome_range(region)
+        chromnames = self.cool.chromnames
+        if grange.chr not in chromnames:
+            grange = grange.change_chromname()
+            if grange.chr not in chromnames:
+                raise IOError("chromosome {} not in cool file".format(grange.chr))
+        return str(grange)
+
+    def fetch(self, region1, region2=None):
+        """
+        Parameters
+        ----------
+        region1 : str
+            like 'chr1:1000-2000'
+        region2 : str
+        """
+        m = self.cool.matrix(balance=self.balance)
+        region1 = self.confirm_chromosome_name(region1)
+        if region2 is not None:
+            region2 = self.confirm_chromosome_name(region2)
+        arr =  m.fetch(region1, region2)
+        return arr
+
+    def fetch_by_bin(self, bin_region_1, bin_region_2):
+        def convert_region(bin_region):
+            if isinstance(bin_region, tuple):
+                grange = self.binid_region2genome_range(bin_region)
+                region = str(grange)
+            else:
+                chr_ = bin_region
+                assert chr_ in self.cool.chromnames
+                region = bin_region
+            return region
+        region1 = convert_region(bin_region_1)
+        region2 = convert_region(bin_region_2)
+        return self.fetch(region1, region2)
+
+
+BedGraph = namedtuple("BedGraph", ['chrom', 'start', 'end', 'value'])
+
+
 def tiling(bin_num, window_size, overlap_size):
     """
     yield a series of 'range block',
@@ -96,43 +187,6 @@ def chromosome_chunks(chromsizes, window_size, overlap, chunk_size):
             yield (chr_, ck)
 
 
-class MatrixSelector(object):
-    """
-    Selector for fetch the matrix from cool file.
-    """
-    def __init__(self, cool, balance=True):
-        self.cool = cool
-        self.balance = balance
-
-    def binid_region2genome_region(self, binid_region):
-        chr_, binid1, binid2 = binid_region
-        assert chr_ in self.cool.chromnames
-        resolution = self.cool.info['bin-size']
-        start = binid1 * resolution
-        end = binid2 * resolution
-        region = (chr_, start, end)
-        return region
-
-    def fetch(self, bin_region_1, bin_region_2):
-        m = self.cool.matrix(balance=self.balance)
-        def format_region(chr_, start, end):
-            return "{}:{}-{}".format(chr_, start, end)
-        def convert_region(bin_region):
-            if isinstance(bin_region, tuple):
-                region = self.binid_region2genome_region(bin_region)
-                region = format_region(*region)
-            else:
-                assert bin_region in self.cool.chromnames
-                region = bin_region
-            return region
-        region1 = convert_region(bin_region_1)
-        region2 = convert_region(bin_region_2)
-        return m.fetch(region1, region2)
-
-
-BedGraph = namedtuple("BedGraph", ['chrom', 'start', 'end', 'value'])
-
-
 def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
     """
     iterate over the chunk, calculate a value.
@@ -147,7 +201,7 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
         blocks
     """
     start, end = chunk[0][0], chunk[-1][-1]
-    matrix = selector.fetch((chrom, start, end), chrom)
+    matrix = selector.fetch_by_bin((chrom, start, end), chrom)
     for s, e in chunk:
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
@@ -157,8 +211,8 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
             continue
         entropy = scipy.stats.entropy(arr)
         bin_region = chrom, s, e
-        region = selector.binid_region2genome_region(bin_region)
-        result = BedGraph(*region, entropy)
+        grange = selector.binid_region2genome_range(bin_region)
+        result = BedGraph(*grange, entropy)
         yield result
 
 
@@ -324,12 +378,6 @@ def call_loci_entropy(cool_uri, output, window_size, overlap, balance, processes
     subprocess.check_call(['rm', output + ".tmp"])  # rm merged tmp file
 
 
-GenomeRange_ = namedtuple("GenomeRange", ["chr", "start", "end"])
-class GenomeRange(GenomeRange_):
-    def __str__(self):
-        return "{}:{}-{}".format(self.chr, self.start, self.end)
-
-
 def read_bed(bed_path):
     """
     Read BED file.
@@ -344,8 +392,15 @@ def read_bed(bed_path):
             yield GenomeRange(chr_, start, end)
 
 
-def region_entropy(matrix_selector, GenomeRange):
-    pass
+def iterover_regions_call_entropy(genome_range_iter, matrix_selector, non_nan_threshold=0.6):
+    for grange in genome_range_iter:
+        m = matrix_selector.fetch(str(grange))
+        arr = m[~np.isnan(m)]
+        non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
+        if non_nan_rate < non_nan_threshold:
+            continue
+        val = scipy.stats.entropy(arr)
+        yield BedGraph(*grange, val)
 
 
 @call_entropy.command()
@@ -355,7 +410,12 @@ def region_entropy(matrix_selector, GenomeRange):
 @click.option("--balance/--no-balance",
     default=True,
     help="Use balanced matrix or not.")
-def call_region_entropy(cool_uri, bed_path, output, balance):
+@click.option("--coverage", "-c",
+    default=0.5,
+    help="The coverage rate threshold, " + \
+         "only bins coverage large equal than this will be keeped. " + \
+         "default 0.5")
+def call_region_entropy(cool_uri, bed_path, output, balance, coverage):
     """
     Args
     ----
@@ -368,6 +428,7 @@ def call_region_entropy(cool_uri, bed_path, output, balance):
     """
     c = Cooler(cool_uri)
     matrix_selector = MatrixSelector(c, balance=balance)
+    regions = read_bed(bed_path)
 
 
 def unit_tests():
