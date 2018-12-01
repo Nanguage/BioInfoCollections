@@ -334,18 +334,18 @@ def call_entropy():
 @click.option("--balance/--no-balance",
     default=True,
     help="Use balanced matrix or not.")
+@click.option("--coverage", "-c",
+    default=0.5,
+    help="The coverage rate threshold, " + \
+         "only bins coverage large equal than this will be keeped. " + \
+         "default 0.5")
 @click.option("--processes", "-p",
     type=int, default=1,
     help="Number of processes.")
 @click.option("--chunk-size", "-s",
     type=int, default=10000,
     help="How many blocks in one chunk, for parallel processing.")
-@click.option("--coverage", "-c",
-    default=0.5,
-    help="The coverage rate threshold, " + \
-         "only bins coverage large equal than this will be keeped. " + \
-         "default 0.5")
-def loci(cool_uri, output, window_size, overlap, balance, processes, chunk_size, coverage):
+def loci(cool_uri, output, window_size, overlap, balance, coverage, processes, chunk_size):
     """
     \b
     Args
@@ -393,15 +393,17 @@ def read_bed(bed_path):
             yield GenomeRange(chr_, start, end)
 
 
-def iterover_regions_call_entropy(genome_range_iter, matrix_selector, non_nan_threshold=0.6):
-    for grange in genome_range_iter:
+def process_region_chunk(chunk, matrix_selector, non_nan_threshold=0.6):
+    out_chunk = []
+    for grange in chunk:
         m = matrix_selector.fetch(str(grange))
         arr = m[~np.isnan(m)]
         non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
         if non_nan_rate < non_nan_threshold:
             continue
         val = scipy.stats.entropy(arr)
-        yield BedGraph(*grange, val)
+        out_chunk.append(BedGraph(*grange, val))
+    return out_chunk
 
 
 @call_entropy.command()
@@ -416,7 +418,13 @@ def iterover_regions_call_entropy(genome_range_iter, matrix_selector, non_nan_th
     help="The coverage rate threshold, " + \
          "only bins coverage large equal than this will be keeped. " + \
          "default 0.5")
-def region(cool_uri, bed_path, output, balance, coverage):
+@click.option("--processes", "-p",
+    type=int, default=1,
+    help="Number of processes.")
+@click.option("--chunk-size", "-s",
+    type=int, default=5000,
+    help="How many blocks in one chunk, for parallel processing.")
+def region(cool_uri, bed_path, output, balance, coverage, processes, chunk_size):
     """
     \b
     Args
@@ -431,9 +439,11 @@ def region(cool_uri, bed_path, output, balance, coverage):
     c = Cooler(cool_uri)
     matrix_selector = MatrixSelector(c, balance=balance)
     regions = read_bed(bed_path)
-    bgs = iterover_regions_call_entropy(regions, matrix_selector, coverage)
-    bgs = filter_abnormal(bgs)
-    write_bedgraph(bgs, output)
+    chunks = chunking(regions, chunk_size)
+    with ProcessPoolExecutor(max_workers=processes) as excuter:
+        for out_chunk in excuter.map(process_region_chunk, chunks, repeat(matrix_selector), repeat(coverage)):
+            bgs = filter_abnormal(out_chunk)
+            write_bedgraph(bgs, output)
 
 
 def unit_tests():
