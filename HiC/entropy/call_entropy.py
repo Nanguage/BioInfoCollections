@@ -216,13 +216,13 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
         yield result
 
 
-def write_bedgraph(bg_iter, outpath):
+def write_bedgraph(bg_iter, outpath, mode='w'):
     """
     write the bedgraph to a file,
     bedgraph format, 4 columns:
         <chromosome>    <start>    <end>    <value>
     """
-    with open(outpath, 'w') as f:
+    with open(outpath, mode) as f:
         for chrom, start, end, value in bg_iter:
             fields = [str(i) for i in (chrom, start, end, value)]
             outline = "\t".join(fields) + "\n"
@@ -440,10 +440,12 @@ def region(cool_uri, bed_path, output, balance, coverage, processes, chunk_size)
     matrix_selector = MatrixSelector(c, balance=balance)
     regions = read_bed(bed_path)
     chunks = chunking(regions, chunk_size)
+    if os.path.exists(output):
+        subprocess.check_call(['rm', output])
     with ProcessPoolExecutor(max_workers=processes) as excuter:
         for out_chunk in excuter.map(process_region_chunk, chunks, repeat(matrix_selector), repeat(coverage)):
             bgs = filter_abnormal(out_chunk)
-            write_bedgraph(bgs, output)
+            write_bedgraph(bgs, output, mode='a')
 
 
 def unit_tests():
