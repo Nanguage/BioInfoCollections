@@ -43,10 +43,20 @@ def region_str2genome_range(region):
 class MatrixSelector(object):
     """
     Selector for fetch the matrix from cool file.
+
+    Parameters
+    ----------
+    cool : `cooler.api.Cooler`
+        cool object.
+    balance : bool
+        balance matrix or not.
+    process_func : callable, optional
+        function for process the fetched array.
     """
-    def __init__(self, cool, balance=True):
+    def __init__(self, cool, balance=True, process_func=None):
         self.cool = cool
         self.balance = balance
+        self.process_func = process_func
 
     def binid_region2genome_range(self, binid_region):
         chr_, binid1, binid2 = binid_region
@@ -86,6 +96,8 @@ class MatrixSelector(object):
         if region2 is not None:
             region2 = self.confirm_chromosome_name(region2)
         arr =  m.fetch(region1, region2)
+        if self.process_func is not None:
+            arr = self.process_func(arr)
         return arr
 
     def fetch_by_bin(self, bin_region_1, bin_region_2):
@@ -187,7 +199,20 @@ def chromosome_chunks(chromsizes, window_size, overlap, chunk_size):
             yield (chr_, ck)
 
 
-def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
+def eliminate_inner(mat, start, end, inner_window):
+    """
+    eliminate inner window of fetched array in loci entropy calling.
+    """
+    center = (start + end) // 2
+    flank = (inner_window -1) // 2
+    len_ = mat.shape[1]
+    s = max(0, center - flank)
+    e = min(center + flank+1, len_)
+    mat[:, s:e] = np.nan
+    return mat
+
+
+def sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=0.6):
     """
     iterate over the chunk, calculate a value.
 
@@ -199,6 +224,8 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
         chromosome name.
     chunk : iterable
         blocks
+    inner_window : int
+        inner window size.
     non_nan_threshold : float
         non-NaN value threshold, if less than this will be droped.
     """
@@ -207,6 +234,8 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
     for s, e in chunk:
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
+        if inner_window > 0:
+            m = eliminate_inner(m, s, e, inner_window)
         arr = m[~np.isnan(m)]
         non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
         if non_nan_rate < non_nan_threshold:
@@ -243,8 +272,8 @@ def filter_abnormal(bg_iter):
         yield bg
 
 
-def process_loci_chunk(selector, chrom, chunk, output, coverage):
-    results = sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=coverage)
+def process_loci_chunk(selector, chrom, chunk, output, inner_window, coverage):
+    results = sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=coverage)
     filtered = filter_abnormal(results)
     try_id = 0
     tmp_path = lambda id_: output + ".tmp.{}".format(id_)
@@ -381,7 +410,8 @@ def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage
 
     with ProcessPoolExecutor(max_workers=processes) as excuter:
         tmp_files = []
-        for fname in excuter.map(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(coverage)):
+        map_ = map if processes == 1 else excuter.map
+        for fname in map_(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(inner_window), repeat(coverage)):
             tmp_files.append(fname)
 
     sorted_lines = merge_and_sort(tmp_files)
@@ -446,7 +476,7 @@ def process_region_chunk(chunk, matrix_selector, non_nan_threshold=0.6):
     type=int, default=5000,
     show_default=True,
     help="How many blocks in one chunk, for parallel processing.")
-def region(cool_uri, bed_path, output, balance, coverage, processes, chunk_size):
+def region(cool_uri, bed_path, output, inner_window, balance, coverage, processes, chunk_size):
     """
     \b
     Args
