@@ -495,7 +495,8 @@ def region(cool_uri, bed_path, output, inner_window, balance, coverage, processe
     if os.path.exists(output):
         subprocess.check_call(['rm', output])
     with ProcessPoolExecutor(max_workers=processes) as excuter:
-        for out_chunk in excuter.map(process_region_chunk, chunks, repeat(matrix_selector), repeat(coverage)):
+        map_ = map if processes == 1 else excuter.map
+        for out_chunk in map_(process_region_chunk, chunks, repeat(matrix_selector), repeat(coverage)):
             bgs = filter_abnormal(out_chunk)
             write_bedgraph(bgs, output, mode='a')
 
