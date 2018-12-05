@@ -199,6 +199,8 @@ def sliding_cal_entropy(selector, chrom, chunk, non_nan_threshold=0.6):
         chromosome name.
     chunk : iterable
         blocks
+    non_nan_threshold : float
+        non-NaN value threshold, if less than this will be droped.
     """
     start, end = chunk[0][0], chunk[-1][-1]
     matrix = selector.fetch_by_bin((chrom, start, end), chrom)
@@ -322,30 +324,40 @@ def call_entropy():
 @click.argument("output")
 @click.option("--window-size", "-w",
     type=int, default=1,
-    help="The size of sliding window. " \
-         "The unit is number of bins, " \
-         "default 1")
+    show_default=True,
+    help="The size of sliding window. "
+         "The unit is number of bins.")
 @click.option("--overlap", "-o",
     type=int, default=0,
-    help="The size of sliding window overlap. "\
-         "Value should less than the window size, " \
-         "the unit is also the number of bins. " \
-         "default 0")
+    show_default=True,
+    help="The size of sliding window overlap. "
+         "Value should less than the window size, "
+         "the unit is also the number of bins.")
+@click.option("--inner-window", "-i",
+    type=int, default=3,
+    show_default=True,
+    help="The size of inner window, "
+         "interactions within inner window will be removed "
+         "as self-ligation interaction."
+         "The unit is number of bins.")
 @click.option("--balance/--no-balance",
     default=True,
+    show_default=True,
     help="Use balanced matrix or not.")
 @click.option("--coverage", "-c",
     default=0.5,
-    help="The coverage rate threshold, " + \
-         "only bins coverage large equal than this will be keeped. " + \
-         "default 0.5")
+    show_default=True,
+    help="The coverage rate threshold, "
+         "only bins coverage large equal than this will be keeped. ")
 @click.option("--processes", "-p",
     type=int, default=1,
+    show_default=True,
     help="Number of processes.")
 @click.option("--chunk-size", "-s",
     type=int, default=10000,
+    show_default=True,
     help="How many blocks in one chunk, for parallel processing.")
-def loci(cool_uri, output, window_size, overlap, balance, coverage, processes, chunk_size):
+def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage, processes, chunk_size):
     """
     \b
     Args
