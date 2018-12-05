@@ -272,32 +272,17 @@ def filter_abnormal(bg_iter):
         yield bg
 
 
-def process_loci_chunk(selector, chrom, chunk, output, inner_window, coverage):
+def process_loci_chunk(selector, chrom, chunk, inner_window, coverage):
     results = sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=coverage)
     filtered = filter_abnormal(results)
-    try_id = 0
-    tmp_path = lambda id_: output + ".tmp.{}".format(id_)
-    while os.path.exists(tmp_path(try_id)):
-        try_id += 1
-    tmp_file = tmp_path(try_id)
-    write_bedgraph(filtered, tmp_file)
-    return tmp_file
+    return list(filtered)
 
 
-def merge_and_sort(tmp_files):
+def sort_bedGraph(path):
     """
-    Merge tmp bedGraph files, and sort it, 
-    yield sorted lines.
+    sort bedGraph files, yield sorted lines.
     """
-    merged_file = re.sub("\.tmp\..", "", tmp_files[0]) + ".tmp"
-    # merge tmp_files
-    cmd = "cat " + " ".join(tmp_files) + " > " + merged_file
-    subprocess.check_call(cmd, shell=True)
-    # rm tmp files
-    cmd = ['rm'] + tmp_files
-    subprocess.check_call(cmd)
-    # sort output
-    cmd = ['sort', '-k1,1', '-k2,2n', '-u', merged_file]
+    cmd = ['sort', '-k1,1', '-k2,2n', '-u', path]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     for line in p.stdout:
         yield line.decode('utf8')
@@ -383,7 +368,7 @@ def call_entropy():
     show_default=True,
     help="Number of processes.")
 @click.option("--chunk-size", "-s",
-    type=int, default=10000,
+    type=int, default=5000,
     show_default=True,
     help="How many blocks in one chunk, for parallel processing.")
 def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage, processes, chunk_size):
@@ -408,13 +393,19 @@ def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage
 
     matrix_selector = MatrixSelector(c, balance=balance)
 
-    with ProcessPoolExecutor(max_workers=processes) as excuter:
-        tmp_files = []
-        map_ = map if processes == 1 else excuter.map
-        for fname in map_(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(output), repeat(inner_window), repeat(coverage)):
-            tmp_files.append(fname)
+    if os.path.exists(output):
+        subprocess.check_call(['rm', output])
 
-    sorted_lines = merge_and_sort(tmp_files)
+    with ProcessPoolExecutor(max_workers=processes) as excuter:
+        map_ = map if processes == 1 else excuter.map
+        tmp_file = output + ".tmp"
+        idx = 0
+        for out_chunk in map_(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(inner_window), repeat(coverage)):
+            print("chunk {}: {}/{} blocks".format(idx, len(out_chunk), chunk_size))
+            write_bedgraph(out_chunk, tmp_file, mode='a')
+            idx += 1
+
+    sorted_lines = sort_bedGraph(tmp_file)
     bgs = parse_bedgraph(sorted_lines)
     non_overlap = eliminate_overlap(bgs, window_size, overlap, resolution)
     write_bedgraph(non_overlap, output)
