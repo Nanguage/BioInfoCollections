@@ -128,11 +128,10 @@ def region_mean(bed, bigwig, output, up_stream, down_stream):
     output : str
         Path to output bed file.
     """
-    bw = pyBigWig.open(bigwig)
     def process_bed(iter):
         for rec in iter:
             ref_pos = rec[1]
-            score = count_range(bw, rec[0], ref_pos, up_stream, down_stream, n_bins=1)[0]
+            score = count_range(bigwig, rec[0], ref_pos, up_stream, down_stream, n_bins=1)[0]
             score = score or '.'
             rec[4] = score
             yield rec
