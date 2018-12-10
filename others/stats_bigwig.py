@@ -2,6 +2,8 @@ from itertools import tee
 from os.path import join
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat, tee
 
 import numpy as np
 import click
@@ -41,13 +43,14 @@ def change_chr_name(chr_name):
         return "chr" + chr_name
 
 
-def count_range(bw, chr, ref_pos, up, down, n_bins):
+def count_range(bigwig, chr, ref_pos, up, down, n_bins):
     """
     Count values in bigwig file within a genome range.
 
     Parameters
     ----------
-    bw : `pyBigWig.bigWigFile`
+    bigwig : str
+        Path to bigwig file.
     chr : str
         chromosome name
     ref_pos : int 
@@ -63,6 +66,7 @@ def count_range(bw, chr, ref_pos, up, down, n_bins):
     ------
     scores : list of {None, float}
     """
+    bw = pyBigWig.open(bigwig)
     chroms = bw.chroms()
     if chr not in chroms:
         chr = change_chr_name(chr)
@@ -228,7 +232,11 @@ def scores_iter_to_hdf5(scores_iter, base_uri, dset_name, chunk_size=2000, dtype
     default=1000,
     show_default=True,
     help="Down stream range")
-def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream):
+@click.option("--processes", "-p",
+    default=1,
+    show_default=True,
+    help="How many process to run.")
+def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream, processes):
     """
     Compute the value matrix in bigwig around start position in bed file.
 
@@ -252,11 +260,14 @@ def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream):
     global num_records
     num_records = df.shape[0]
     dataframe_to_hdf5(df, h5group_uri, "ref_bed")
-    bw = pyBigWig.open(bigwig)
     bed_recs = read_bed(bed)
     def iterover_fetch_scores(iter):
-        for rec in iter:
-            scores = count_range(bw, rec[0], rec[1], up_stream, down_stream, num_bins)
+        chrs, ref_pos = tee(iter)
+        chrs = (rec[0] for rec in chrs)
+        ref_pos = (rec[1] for rec in ref_pos)
+        map_ = ProcessPoolExecutor(max_workers=processes).map if processes > 1 else map
+        args = (repeat(bigwig), chrs, ref_pos, repeat(up_stream), repeat(down_stream), repeat(num_bins))
+        for scores in map_(count_range, *args):
             yield scores
     scores_iter = iterover_fetch_scores(bed_recs)
     incremental_chunk_size = 20
