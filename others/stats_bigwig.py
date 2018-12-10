@@ -4,6 +4,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from itertools import repeat, tee
+from datetime import datetime
 
 import numpy as np
 import click
@@ -216,6 +217,22 @@ def scores_iter_to_hdf5(scores_iter, base_uri, dset_name, chunk_size=2000, dtype
         incremental_write_h5dset(base_uri, dset_name, chunk_arr)
 
 
+def write_meta_info(h5group_uri, bed, bigwig, num_bins, up_stream, down_stream):
+    path, group = split_uri(h5group_uri)
+    f = hdf5_block_open(path)
+    now = str(datetime.now())
+    grp = f[group] if group else f
+    grp.attrs.update({
+        'create_date': now,
+        'reference_bed': bed,
+        'source_bigwig': bigwig,
+        'number_of_bins': num_bins,
+        'up_stream_bases': up_stream,
+        'down_stream_bases': down_stream,
+    })
+    f.close()
+
+
 @stats_bigwig.command()
 @click.argument("bed")
 @click.argument("bigwig")
@@ -253,11 +270,10 @@ def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream, p
     """
     path, group = split_uri(h5group_uri)
     if not os.path.exists(path):
-        f = h5py.File(path)
-        f.close()
+        h5py.File(path).close()  # create, if file not exist.
     df = read_bed_df(bed)
     global num_records
-    num_records = df.shape[0]
+    num_records = df.shape[0]  # for create progress bar
     dataframe_to_hdf5(df, h5group_uri, "ref_bed")
     bed_recs = read_bed(bed)
     def iterover_fetch_scores(iter):
@@ -271,6 +287,7 @@ def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream, p
     scores_iter = iterover_fetch_scores(bed_recs)
     incremental_chunk_size = 20
     scores_iter_to_hdf5(scores_iter, h5group_uri, "matrix", incremental_chunk_size)
+    write_meta_info(h5group_uri, bed, bigwig, num_bins, up_stream, down_stream)
 
 
 if __name__ == "__main__":
