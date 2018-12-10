@@ -1,6 +1,7 @@
 from itertools import tee
 from os.path import join
 import os
+import time
 
 import numpy as np
 import click
@@ -153,22 +154,41 @@ def split_uri(uri):
 
 def dataframe_to_hdf5(df, base_uri, gname):
     path, group = split_uri(base_uri)
+    hdf5_block_open(path).close()  # waiting for hdf lock release
     with pd.HDFStore(path) as store:
         group = join(group, gname)
         store[group] = df
 
 
+def hdf5_block_open(path, wait_time=5):
+    """
+    open the hdf file.
+    wait, if it is be locked.
+    """
+    while True:
+        try:
+            f = h5py.File(path)
+            break
+        except OSError as oe:
+            print(str(oe))
+            print("[Warning] {} is locked waiting for lock release.".format(path))
+            time.sleep(wait_time)
+    return f
+
+
 def incremental_write_h5dset(base_uri, dset_name, array):
     path, group = split_uri(base_uri)
-    with h5py.File(path) as f:
-        grp = f[group] if group else f
-        if dset_name not in grp:
-            grp.create_dataset(dset_name, data=array, maxshape=(None, array.shape[1]))
-        else:
-            dset = grp[dset_name]
-            chunk_size = array.shape[0]
-            dset.resize(dset.shape[0] + chunk_size, axis=0)
-            dset[-chunk_size:] = array
+    wait_time = 5
+    f = hdf5_block_open(path, wait_time)
+    grp = f[group] if group else f
+    if dset_name not in grp:
+        grp.create_dataset(dset_name, data=array, maxshape=(None, array.shape[1]))
+    else:
+        dset = grp[dset_name]
+        chunk_size = array.shape[0]
+        dset.resize(dset.shape[0] + chunk_size, axis=0)
+        dset[-chunk_size:] = array
+    f.close()
 
 
 def clean_dataset(base_uri, dset_name):
@@ -239,7 +259,7 @@ def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream):
             scores = count_range(bw, rec[0], rec[1], up_stream, down_stream, num_bins)
             yield scores
     scores_iter = iterover_fetch_scores(bed_recs)
-    incremental_chunk_size = 2000
+    incremental_chunk_size = 20
     scores_iter_to_hdf5(scores_iter, h5group_uri, "matrix", incremental_chunk_size)
 
 
