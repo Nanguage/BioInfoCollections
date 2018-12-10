@@ -41,11 +41,32 @@ def change_chr_name(chr_name):
 
 
 def count_range(bw, chr, ref_pos, up, down, n_bins):
+    """
+    Count values in bigwig file within a genome range.
+
+    Parameters
+    ----------
+    bw : `pyBigWig.bigWigFile`
+    chr : str
+        chromosome name
+    ref_pos : int 
+        reference point position.
+    up : int
+        how many bp up stream relative to reference point
+    down : int
+        down stream
+    n_bins: int
+        how many bins.
+    
+    Return
+    ------
+    scores : list of {None, float}
+    """
     chroms = bw.chroms()
     if chr not in chroms:
         chr = change_chr_name(chr)
         if chr not in chroms:
-            return
+            return [None] * n_bins
     s_, e_ = ref_pos - up, ref_pos + down
     chr_len = chroms[chr]
     x1 = max(0, s_)
@@ -137,34 +158,39 @@ def dataframe_to_hdf5(df, base_uri, gname):
         store[group] = df
 
 
-def incremental_write_h5dset(group_handler, dset_name, array):
-    grp = group_handler
-    if dset_name not in grp:
-        grp.create_dataset(dset_name, data=array, maxshape=(None, array.shape[1]))
-    else:
-        dset = grp[dset_name]
-        chunk_size = array.shape[0]
-        dset.resize(dset.shape[0] + chunk_size, axis=0)
-        dset[-chunk_size:] = array
+def incremental_write_h5dset(base_uri, dset_name, array):
+    path, group = split_uri(base_uri)
+    with h5py.File(path) as f:
+        grp = f[group] if group else f
+        if dset_name not in grp:
+            grp.create_dataset(dset_name, data=array, maxshape=(None, array.shape[1]))
+        else:
+            dset = grp[dset_name]
+            chunk_size = array.shape[0]
+            dset.resize(dset.shape[0] + chunk_size, axis=0)
+            dset[-chunk_size:] = array
 
 
-def arr_iter_to_hdf5(arr_iter, base_uri, dset_name, chunk_size=2000, dtype='float64'):
+def clean_dataset(base_uri, dset_name):
     path, group = split_uri(base_uri)
     with h5py.File(path) as f:
         grp = f[group] if group else f
         if dset_name in grp:  # clean dataset
             del grp[dset_name]
-        chunk = []
-        for idx, arr in tqdm(enumerate(arr_iter), total=num_records):
-            if (idx != 0) and (idx % chunk_size == 0):
-                chunk_arr = np.asarray(chunk, dtype=dtype)
-#                import ipdb; ipdb.set_trace()
-                incremental_write_h5dset(grp, dset_name, chunk_arr)
-                chunk = []
-            chunk.append(arr)
-        if chunk:
+
+
+def scores_iter_to_hdf5(scores_iter, base_uri, dset_name, chunk_size=2000, dtype='float64'):
+    clean_dataset(base_uri, dset_name)
+    chunk = []
+    for idx, scores in tqdm(enumerate(scores_iter), total=num_records):
+        if (idx != 0) and (idx % chunk_size == 0):
             chunk_arr = np.asarray(chunk, dtype=dtype)
-            incremental_write_h5dset(grp, dset_name, chunk_arr)
+            incremental_write_h5dset(base_uri, dset_name, chunk_arr)
+            chunk = []
+        chunk.append(scores)
+    if chunk:
+        chunk_arr = np.asarray(chunk, dtype=dtype)
+        incremental_write_h5dset(base_uri, dset_name, chunk_arr)
 
 
 @stats_bigwig.command()
@@ -208,13 +234,13 @@ def compute_matrix(bed, bigwig, h5group_uri, num_bins, up_stream, down_stream):
     dataframe_to_hdf5(df, h5group_uri, "ref_bed")
     bw = pyBigWig.open(bigwig)
     bed_recs = read_bed(bed)
-    def iterover_fetch_array(iter):
+    def iterover_fetch_scores(iter):
         for rec in iter:
-            arr = count_range(bw, rec[0], rec[1], up_stream, down_stream, num_bins)
-            yield arr
-    arr_iter = iterover_fetch_array(bed_recs)
-    incremental_chunk_size = 20
-    arr_iter_to_hdf5(arr_iter, h5group_uri, "matrix", incremental_chunk_size)
+            scores = count_range(bw, rec[0], rec[1], up_stream, down_stream, num_bins)
+            yield scores
+    scores_iter = iterover_fetch_scores(bed_recs)
+    incremental_chunk_size = 2000
+    scores_iter_to_hdf5(scores_iter, h5group_uri, "matrix", incremental_chunk_size)
 
 
 if __name__ == "__main__":
