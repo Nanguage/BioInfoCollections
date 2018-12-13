@@ -58,10 +58,18 @@ class MatrixSelector(object):
         self.balance = balance
         self.process_func = process_func
 
+    @property
+    def chromsizes(self):
+        return self.cool.chromsizes.to_dict()
+
+    @property
+    def binsize(self):
+        return self.cool.binsize
+
     def binid_region2genome_range(self, binid_region):
         chr_, binid1, binid2 = binid_region
         assert chr_ in self.cool.chromnames
-        resolution = self.cool.info['bin-size']
+        resolution = self.binsize
         start = binid1 * resolution
         end = binid2 * resolution
         grange = GenomeRange(chr_, start, end)
@@ -212,7 +220,28 @@ def eliminate_inner(mat, start, end, inner_window):
     return mat
 
 
-def sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=0.6):
+def outer_window_bin_range(genome_range, chromsizes, outer_window_size, bin_size):
+    chr_, start, end = genome_range
+    if chr_ not in chromsizes:
+        chr_, _, _ = genome_range.change_chromname()
+    center_bin = ((end - start) // 2) // bin_size
+    flank = (outer_window_size - 1) // 2
+    num_bin_chr = chromsizes[chr_] // bin_size
+    if center_bin - flank and center_bin + flank > num_bin_chr:
+        return chr_
+    elif center_bin - flank < 0:
+        outer_start = 0
+        outer_end = outer_window_size
+    elif center_bin + flank > num_bin_chr:
+        outer_end = num_bin_chr
+        outer_start = num_bin_chr - outer_window_size
+    else:
+        outer_start = center_bin - flank
+        outer_end = center_bin + flank + 1
+    return GenomeRange(chr_, outer_start, outer_end)
+
+
+def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_nan_threshold=0.6):
     """
     iterate over the chunk, calculate a value.
 
@@ -226,11 +255,15 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=
         blocks
     inner_window : int
         inner window size.
+    outer_window : int
+        outer window size.
     non_nan_threshold : float
         non-NaN value threshold, if less than this will be droped.
     """
     start, end = chunk[0][0], chunk[-1][-1]
-    matrix = selector.fetch_by_bin((chrom, start, end), chrom)
+    bin_range = GenomeRange(chrom, start, end)
+    outer_bin_range = outer_window_bin_range(bin_range, selector.chromsizes, outer_window, selector.binsize)
+    matrix = selector.fetch_by_bin((chrom, start, end), outer_bin_range)
     for s, e in chunk:
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
@@ -272,8 +305,8 @@ def filter_abnormal(bg_iter):
         yield bg
 
 
-def process_loci_chunk(selector, chrom, chunk, inner_window, coverage):
-    results = sliding_cal_entropy(selector, chrom, chunk, inner_window, non_nan_threshold=coverage)
+def process_loci_chunk(selector, chrom, chunk, inner_window, outer_window, coverage):
+    results = sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_nan_threshold=coverage)
     filtered = filter_abnormal(results)
     return list(filtered)
 
@@ -354,6 +387,12 @@ def call_entropy():
          "interactions within inner window will be removed "
          "as self-ligation interaction. "
          "The unit is number of bins.")
+@click.option("--outer-window", "-x",
+    type=int, default=1001,
+    show_default=True,
+    help="The size of outer window, "
+         "only consider the interactions within outer window."
+         "The unit is number of bins.")
 @click.option("--balance/--no-balance",
     default=True,
     show_default=True,
@@ -371,8 +410,17 @@ def call_entropy():
     type=int, default=5000,
     show_default=True,
     help="How many blocks in one chunk, for parallel processing.")
-def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage, processes, chunk_size):
+def loci(cool_uri, output, window_size, overlap, inner_window, outer_window, balance, coverage, processes, chunk_size):
     """
+
+    \b
+                         inner window
+                         |-|
+    |--------------------------------------------------------|
+                     |-       -|
+                     (sliding) window
+         |-                                 -|
+                outer window
     \b
     Args
     ----
@@ -400,7 +448,8 @@ def loci(cool_uri, output, window_size, overlap, inner_window, balance, coverage
         map_ = map if processes == 1 else excuter.map
         tmp_file = output + ".tmp"
         idx = 0
-        for out_chunk in map_(process_loci_chunk, repeat(matrix_selector), chroms, chunks, repeat(inner_window), repeat(coverage)):
+        args = repeat(matrix_selector), chroms, chunks, repeat(inner_window), repeat(outer_window), repeat(coverage)
+        for out_chunk in map_(process_loci_chunk, *args):
             print("chunk {}: {}/{} blocks".format(idx, len(out_chunk), chunk_size))
             write_bedgraph(out_chunk, tmp_file, mode='a')
             idx += 1
