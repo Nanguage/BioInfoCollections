@@ -209,36 +209,33 @@ def chromosome_chunks(chromsizes, window_size, overlap, chunk_size):
 
 def eliminate_inner(mat, start, end, inner_window):
     """
-    eliminate inner window of fetched array in loci entropy calling.
+    eliminate inner window of fetched matrix in loci entropy calling.
     """
-    center = (start + end) // 2
-    flank = (inner_window -1) // 2
-    len_ = mat.shape[1]
-    s = max(0, center - flank)
-    e = min(center + flank+1, len_)
-    mat[:, s:e] = np.nan
+    flank = (inner_window - 1) // 2
+    inner_start = max(0, start-flank)
+    inner_end = min(end+flank, mat.shape[1])
+    inner_mat = mat[:, inner_start:inner_end]
+    s = inner_mat.shape
+    mask = sum([np.eye(*s, k=i) for i in np.arange(-flank, flank+1)])
+    inner_mat[mask == 1] = np.nan
     return mat
 
 
-def outer_window_bin_range(genome_range, chromsizes, outer_window_size, bin_size):
-    chr_, start, end = genome_range
-    if chr_ not in chromsizes:
-        chr_, _, _ = genome_range.change_chromname()
-    center_bin = ((end - start) // 2) // bin_size
-    flank = (outer_window_size - 1) // 2
-    num_bin_chr = chromsizes[chr_] // bin_size
-    if center_bin - flank and center_bin + flank > num_bin_chr:
-        return chr_
-    elif center_bin - flank < 0:
-        outer_start = 0
-        outer_end = outer_window_size
-    elif center_bin + flank > num_bin_chr:
-        outer_end = num_bin_chr
-        outer_start = num_bin_chr - outer_window_size
+def cut_outer(mat, start, end, outer_window):
+    """
+    Exclude the interactions, outside the outer window.
+    """
+    center = (start + end) // 2
+    flank = (outer_window - 1) // 2
+    if center - flank < 0 and center + flank > mat.shape[1]:
+        return mat
+    elif center - flank < 0:
+        res = mat[:, :outer_window]
+    elif center + flank > mat.shape[1]:
+        res = mat[:, -outer_window:]
     else:
-        outer_start = center_bin - flank
-        outer_end = center_bin + flank + 1
-    return GenomeRange(chr_, outer_start, outer_end)
+        res = mat[:, center-flank:center+flank+1]
+    return res
 
 
 def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_nan_threshold=0.6):
@@ -261,14 +258,14 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_
         non-NaN value threshold, if less than this will be droped.
     """
     start, end = chunk[0][0], chunk[-1][-1]
-    bin_range = GenomeRange(chrom, start, end)
-    outer_bin_range = outer_window_bin_range(bin_range, selector.chromsizes, outer_window, selector.binsize)
-    matrix = selector.fetch_by_bin((chrom, start, end), outer_bin_range)
+    matrix = selector.fetch_by_bin((chrom, start, end), chrom)
+    if inner_window > 0:
+        matrix = eliminate_inner(matrix, start, end, inner_window)
     for s, e in chunk:
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
-        if inner_window > 0:
-            m = eliminate_inner(m, s, e, inner_window)
+        if outer_window > 0:
+            m = cut_outer(m, s_, e_, outer_window)
         arr = m[~np.isnan(m)]
         non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
         if non_nan_rate < non_nan_threshold:
@@ -386,12 +383,14 @@ def call_entropy():
     help="The size of inner window, "
          "interactions within inner window will be removed "
          "as self-ligation interaction. "
+         "If not remove interactions within inner window, use 0. "
          "The unit is number of bins.")
 @click.option("--outer-window", "-x",
     type=int, default=1001,
     show_default=True,
     help="The size of outer window, "
-         "only consider the interactions within outer window."
+         "only consider the interactions within outer window. "
+         "If consider interactions with whole chromosomes, use 0. "
          "The unit is number of bins.")
 @click.option("--balance/--no-balance",
     default=True,
