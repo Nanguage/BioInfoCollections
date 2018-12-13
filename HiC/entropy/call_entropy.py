@@ -416,8 +416,6 @@ def loci(cool_uri, output, window_size, overlap, inner_window, outer_window, bal
                          inner window
                          |-|
     |--------------------------------------------------------|
-                     |-       -|
-                     (sliding) window
          |-                                 -|
                 outer window
     \b
