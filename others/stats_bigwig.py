@@ -97,6 +97,22 @@ def iterator_to_dataframe(bed_iter):
     return df
 
 
+def global_mean(bigwig):
+    bw = pyBigWig.open(bigwig)
+    chromsizes = bw.chroms()
+    global_sum = sum([bw.stats(chr_)[0] * chromsizes[chr_] for chr_ in chromsizes.keys()])
+    length_sum = sum(list(chromsizes.values()))
+    global_mean = global_sum / length_sum
+    return global_mean
+
+
+def normalize_bed_score(bed_iter, factor):
+    for bed in bed_iter:
+        if isinstance(bed[4], float):
+            bed[4] = bed[4] / factor
+        yield bed
+
+
 @click.group()
 def stats_bigwig():
     pass
@@ -114,7 +130,11 @@ def stats_bigwig():
     default=1000,
     show_default=True,
     help="Down stream range")
-def region_mean(bed, bigwig, output, up_stream, down_stream):
+@click.option("--normalize/--not-normalize", "-n",
+    default=False,
+    show_default=True,
+    help="Normalize the score with global mean.")
+def region_mean(bed, bigwig, output, up_stream, down_stream, normalize):
     """
 
     Count the mean value in bigwig file, around start position in bed file.
@@ -129,8 +149,11 @@ def region_mean(bed, bigwig, output, up_stream, down_stream):
     output : str
         Path to output bed file.
     """
+    df = read_bed_df(bed)
+    N = df.shape[0]
+    del df
     def process_bed(iter):
-        for rec in iter:
+        for rec in tqdm(iter, total=N):
             ref_pos = rec[1]
             score = count_range(bigwig, rec[0], ref_pos, up_stream, down_stream, n_bins=1)[0]
             score = score or '.'
@@ -138,6 +161,9 @@ def region_mean(bed, bigwig, output, up_stream, down_stream):
             yield rec
     bed_recs = read_bed(bed)
     scored_bed = process_bed(bed_recs)
+    if normalize:
+        mean = global_mean(bigwig)
+        scored_bed = normalize_bed_score(scored_bed, mean)
     write_bed(scored_bed, output)
 
 
