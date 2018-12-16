@@ -342,16 +342,15 @@ def eliminate_overlap(bg_iter, window_size, overlap, resolution):
     prev = next(bg_iter)
     for bg in bg_iter:
         if bg.chrom == prev.chrom:
-            expected_step = (window_size - overlap) * resolution
             step = bg.start - prev.start
             if step <= 0:
                 raise IOError("input bedgraph should be sorted.")
             else:
-                if step != expected_step:
-                    yield prev
-                else:
+                if bg.start < prev.end:  # overlap
                     new_prev = BedGraph(prev.chrom, prev.start, bg.start, prev.value)
                     yield new_prev
+                else:
+                    yield prev
         else:
             yield prev
         prev = bg
