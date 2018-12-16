@@ -265,7 +265,7 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
         if outer_window > 0:
-            m = cut_outer(m, s_, e_, outer_window)
+            m = cut_outer(m, s, e, outer_window)
         arr = m[~np.isnan(m)]
         non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
         if non_nan_rate < non_nan_threshold:
