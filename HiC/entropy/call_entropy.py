@@ -13,6 +13,7 @@ import click
 from cooler.api import Cooler
 import numpy as np
 import scipy.stats
+from sklearn.linear_model import LinearRegression
 
 
 GenomeRange_ = namedtuple("GenomeRange", ["chr", "start", "end"])
@@ -224,21 +225,82 @@ def eliminate_inner(mat, start, end, inner_window):
 def cut_outer(mat, start, end, outer_window):
     """
     Exclude the interactions, outside the outer window.
+
+    Return
+    ------
+    res : `numpy.ndarray`
+        Cutted matrix.
+    c : int
+        Relative matrix center index.
     """
     center = (start + end) // 2
     flank = (outer_window - 1) // 2
     if center - flank < 0 and center + flank > mat.shape[1]:
-        return mat
+        res = mat
+        c = res.shape[1] // 2 + 1
     elif center - flank < 0:
         res = mat[:, :outer_window]
+        c = center
     elif center + flank > mat.shape[1]:
         res = mat[:, -outer_window:]
+        c = center - (mat.shape[1] - outer_window)
     else:
         res = mat[:, center-flank:center+flank+1]
+        c = res.shape[1] // 2 + 1
+    return res, c
+
+
+def subtract_arr_expect(arr, relative_center):
+    """
+    Estimate the expect value and subtract it.
+    """
+    MIN_NUM = 3
+    up_part = arr[:relative_center]
+    up_part = up_part[::-1]
+    down_part = arr[relative_center:]
+    if up_part.shape[0] >= MIN_NUM and down_part.shape[0] >= MIN_NUM:
+        expect_up = estimate_expect_1d(up_part)
+        expect_down = estimate_expect_1d(down_part)
+        up_part_ = (up_part - expect_up)[1:]
+        down_part = (down_part - expect_down)[1:]
+        res = np.concatenate((up_part, np.asarray([np.nan])))
+    elif up_part.shape[0] < MIN_NUM and down_part.shape[0] >= MIN_NUM:
+        expect_down = estimate_expect_1d(down_part)
+        down_part = (down_part - expect_down)[1:]
+        res = np.concatenate( (np.zeros(MIN_NUM), down_part) )
+    elif up_part.shape[0] >= MIN_NUM and down_part.shape[0] < MIN_NUM:
+        expect_up = estimate_expect_1d(up_part)
+        up_part_ = (up_part - expect_up)[1:]
+        res = np.concatenate( (up_part, np.zeros(MIN_NUM)) )
+    else:
+        raise ValueError("Input array too small")
     return res
 
 
-def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_nan_threshold=0.6):
+def estimate_expect_1d(arr):
+    xs = np.arange(arr.shape[0])
+    xs = xs[arr != 0]
+    xs = np.log2(xs + 1)
+    ys = np.log2(arr[arr!=0])
+    xs = xs[~np.isnan(ys)]
+    ys = ys[~np.isnan(ys)]
+    if xs.shape[0] > 1:
+        lr = LinearRegression()
+        lr.fit(X=xs.reshape(-1,1), y=ys.reshape(-1,1))
+        a, b = lr.coef_[0][0], lr.intercept_[0]
+        def f(d):
+            return (2 ** b) * (d ** a)
+        expect = f(np.arange(1, arr.shape[0]+1))
+        return expect
+    else:
+        return np.zeros(arr.shape[0])
+
+
+def relu(arr):
+    return np.where(arr > 0, arr, 0)
+
+
+def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, subtract_expect, non_nan_threshold=0.6):
     """
     iterate over the chunk, calculate a value.
 
@@ -254,6 +316,8 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_
         inner window size.
     outer_window : int
         outer window size.
+    minus_except : bool
+        minus except value or not.
     non_nan_threshold : float
         non-NaN value threshold, if less than this will be droped.
     """
@@ -265,11 +329,15 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_
         s_, e_ = s - start, e - start
         m = matrix[s_:e_, :]
         if outer_window > 0:
-            m = cut_outer(m, s, e, outer_window)
-        arr = m[~np.isnan(m)]
-        non_nan_rate = arr.shape[0] / (m.shape[0] * m.shape[1])
+            m, c = cut_outer(m, s, e, outer_window)
+        arr = np.nanmean(m, axis=0)
+        non_nan_rate = arr[~np.isnan(arr)].shape[0] / arr.shape[0]
         if non_nan_rate < non_nan_threshold:
             continue
+        if subtract_expect:
+            arr = subtract_arr_expect(arr, c)
+            arr = relu(arr)
+        arr = m[~np.isnan(m)]
         entropy = scipy.stats.entropy(arr)
         bin_region = chrom, s, e
         grange = selector.binid_region2genome_range(bin_region)
@@ -302,8 +370,8 @@ def filter_abnormal(bg_iter):
         yield bg
 
 
-def process_loci_chunk(selector, chrom, chunk, inner_window, outer_window, coverage):
-    results = sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, non_nan_threshold=coverage)
+def process_loci_chunk(selector, chrom, chunk, inner_window, outer_window, subtract_expect, coverage):
+    results = sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, subtract_expect, non_nan_threshold=coverage)
     filtered = filter_abnormal(results)
     return list(filtered)
 
@@ -395,6 +463,10 @@ def call_entropy():
     default=True,
     show_default=True,
     help="Use balanced matrix or not.")
+@click.option("--subtract-expect/--no-subtract-expect",
+    default=True,
+    show_default=True,
+    help="Estimate the expect interaction value and minus it.")
 @click.option("--coverage", "-c",
     default=0.5,
     show_default=True,
@@ -408,7 +480,7 @@ def call_entropy():
     type=int, default=5000,
     show_default=True,
     help="How many blocks in one chunk, for parallel processing.")
-def loci(cool_uri, output, window_size, overlap, inner_window, outer_window, balance, coverage, processes, chunk_size):
+def loci(cool_uri, output, window_size, overlap, inner_window, outer_window, balance, subtract_expect, coverage, processes, chunk_size):
     """
 
     \b
@@ -444,7 +516,7 @@ def loci(cool_uri, output, window_size, overlap, inner_window, outer_window, bal
         map_ = map if processes == 1 else excuter.map
         tmp_file = output + ".tmp"
         idx = 0
-        args = repeat(matrix_selector), chroms, chunks, repeat(inner_window), repeat(outer_window), repeat(coverage)
+        args = repeat(matrix_selector), chroms, chunks, repeat(inner_window), repeat(outer_window), repeat(subtract_expect), repeat(coverage)
         for out_chunk in map_(process_loci_chunk, *args):
             print("chunk {}: {}/{} blocks".format(idx, len(out_chunk), chunk_size))
             write_bedgraph(out_chunk, tmp_file, mode='a')
