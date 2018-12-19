@@ -262,16 +262,16 @@ def subtract_arr_expect(arr, relative_center):
         expect_up = estimate_expect_1d(up_part)
         expect_down = estimate_expect_1d(down_part)
         up_part_ = (up_part - expect_up)[1:]
-        down_part = (down_part - expect_down)[1:]
-        res = np.concatenate((up_part, np.asarray([np.nan])))
+        down_part_ = (down_part - expect_down)[1:]
+        res = np.concatenate((up_part_[::-1], np.asarray([0]), down_part_))
     elif up_part.shape[0] < MIN_NUM and down_part.shape[0] >= MIN_NUM:
         expect_down = estimate_expect_1d(down_part)
-        down_part = (down_part - expect_down)[1:]
-        res = np.concatenate( (np.zeros(MIN_NUM), down_part) )
+        down_part_ = (down_part - expect_down)[1:]
+        res = np.concatenate( (np.zeros(MIN_NUM), down_part_) )
     elif up_part.shape[0] >= MIN_NUM and down_part.shape[0] < MIN_NUM:
         expect_up = estimate_expect_1d(up_part)
         up_part_ = (up_part - expect_up)[1:]
-        res = np.concatenate( (up_part, np.zeros(MIN_NUM)) )
+        res = np.concatenate( (up_part_, np.zeros(MIN_NUM)) )
     else:
         raise ValueError("Input array too small")
     return res
@@ -337,7 +337,7 @@ def sliding_cal_entropy(selector, chrom, chunk, inner_window, outer_window, subt
         if subtract_expect:
             arr = subtract_arr_expect(arr, c)
             arr = relu(arr)
-        arr = m[~np.isnan(m)]
+        arr = arr[~np.isnan(arr)]
         entropy = scipy.stats.entropy(arr)
         bin_region = chrom, s, e
         grange = selector.binid_region2genome_range(bin_region)
