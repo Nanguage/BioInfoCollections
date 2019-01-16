@@ -7,7 +7,7 @@ from itertools import repeat
 
 import click
 from cooler.api import Cooler
-from scipy.stats import chisquare
+from scipy.stats import chisquare, entropy
 import numpy as np
 
 GenomeRange_ = namedtuple("GenomeRange", ["chr", "start", "end"])
@@ -157,7 +157,7 @@ def chunking(block_iter, chunk_size):
 
 MIN_VAL = 1e-5
 
-def process_region_chunk(range_chunk, mat_sel1, mat_sel2, gap_ratio_threshold):
+def process_region_chunk_chi_square(range_chunk, mat_sel1, mat_sel2, gap_ratio_threshold):
     out_chunk = []
     for grange in range_chunk:
         mat1 = mat_sel1.fetch(str(grange))
@@ -190,7 +190,12 @@ def write_result(out_chunk, output, mode="a"):
             f.write(outline)
 
 
-@click.command()
+@click.group()
+def region_compare():
+    pass
+
+
+@region_compare.command()
 @click.argument("cool-uri-1")
 @click.argument("cool-uri-2")
 @click.argument("bed-path")
@@ -244,9 +249,93 @@ def chi_square(cool_uri_1, cool_uri_2, bed_path, output, inner_window, balance, 
         subprocess.check_call(['rm', output])
     with ProcessPoolExecutor(max_workers=processes) as excuter:
         map_ = map if processes == 1 else excuter.map
-        for out_chunk in map_(process_region_chunk, chunks, repeat(matrix_selector_1), repeat(matrix_selector_2), repeat(gap_ratio)):
+        for out_chunk in map_(process_region_chunk_chi_square, chunks, repeat(matrix_selector_1), repeat(matrix_selector_2), repeat(gap_ratio)):
+            write_result(out_chunk, output, mode='a')
+
+
+def process_region_chunk_kld(range_chunk, mat_sel1, mat_sel2, gap_ratio_threshold):
+    out_chunk = []
+    for grange in range_chunk:
+        mat1 = mat_sel1.fetch(str(grange))
+        mat2 = mat_sel2.fetch(str(grange))
+        nan1 = mat1[np.isnan(mat1)]
+        nan2 = mat2[np.isnan(mat2)]
+        gp_ratio_1 = nan1.shape[0] / (mat1.shape[0] * mat1.shape[1])
+        gp_ratio_2 = nan2.shape[0] / (mat2.shape[0] * mat2.shape[1])
+        if gp_ratio_1 > gap_ratio_threshold or gp_ratio_2 > gap_ratio_threshold:
+            kld = np.nan
+        else:
+            mat1 = mat1 / np.nansum(mat1)
+            mat2 = mat2 / np.nansum(mat2)
+            mat1[mat1 == 0] = MIN_VAL
+            mat2[mat2 == 0] = MIN_VAL
+            mat1[np.isnan(mat1)] = MIN_VAL
+            mat2[np.isnan(mat2)] = MIN_VAL
+            mat1 = mat1.reshape(-1)
+            mat2 = mat2.reshape(-1)
+            kld = entropy(mat1, mat2)
+        res = (grange.chr, grange.start, grange.end, kld, gp_ratio_1, gp_ratio_2)
+        out_chunk.append(res)
+    return out_chunk
+
+
+@region_compare.command()
+@click.argument("cool-uri-1")
+@click.argument("cool-uri-2")
+@click.argument("bed-path")
+@click.argument("output")
+@click.option("--inner-window", "-i",
+    type=int, default=3,
+    show_default=True,
+    help="The size of inner window, "
+         "interactions within inner window will be removed "
+         "as self-ligation interaction. "
+         "The unit is number of bins.")
+@click.option("--balance/--no-balance",
+    default=True,
+    show_default=True,
+    help="Use balanced matrix or not.")
+@click.option("--gap-ratio", "-g",
+    default=0.2,
+    show_default=True,
+    help="The gap ratio threshold, "
+         "only gap ratio less equal than this will be keeped. ")
+@click.option("--processes", "-p",
+    type=int, default=1,
+    show_default=True,
+    help="Number of processes.")
+@click.option("--chunk-size", "-s",
+    type=int, default=5000,
+    show_default=True,
+    help="How many blocks in one chunk, for parallel processing.")
+def kld(cool_uri_1, cool_uri_2, bed_path, output, inner_window, balance, gap_ratio, processes, chunk_size):
+    """
+    \b
+    Args
+    ----
+    cool_uri_1 : str
+        URI of input cool container 1.
+    cool_uri_2 : str
+        URI of input cool container 2.
+    bed_path : str
+        Path to input BED.
+    output : str
+        Path to output BEDGRAPH file.
+    """
+    c1 = Cooler(cool_uri_1)
+    matrix_selector_1 = MatrixSelector(c1, balance=balance)
+    c2 = Cooler(cool_uri_2)
+    matrix_selector_2 = MatrixSelector(c2, balance=balance)
+    
+    regions = read_bed(bed_path)
+    chunks = chunking(regions, chunk_size)
+    if os.path.exists(output):
+        subprocess.check_call(['rm', output])
+    with ProcessPoolExecutor(max_workers=processes) as excuter:
+        map_ = map if processes == 1 else excuter.map
+        for out_chunk in map_(process_region_chunk_kld, chunks, repeat(matrix_selector_1), repeat(matrix_selector_2), repeat(gap_ratio)):
             write_result(out_chunk, output, mode='a')
 
 
 if __name__ == "__main__":
-    eval("chi_square()")
+    eval("region_compare()")
