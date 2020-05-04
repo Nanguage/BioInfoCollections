@@ -88,12 +88,5 @@ fn main() {
         }
 
     }
-
     
-    let x =     b"ACCCTGGATGGGGG";
-    let y = b"AAAAACCGTTGAT";
-    let score = |a: u8, b: u8| if a == b {1i32} else {-1i32};
-    let mut aligner = Aligner::with_capacity(x.len(), y.len(), -5, -1, &score);
-    let alignment = aligner.local(x, y);
-    println!("{:?}", alignment);
 }
